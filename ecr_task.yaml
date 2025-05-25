@@ -1,0 +1,30 @@
+Resources:
+  FastApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: fastapi-repo
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 30 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 30
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+Outputs:
+  FastApiRepositoryUri:
+    Value: !GetAtt FastApiRepository.RepositoryUri
+    Export:
+      Name: FastApiRepositoryUri
