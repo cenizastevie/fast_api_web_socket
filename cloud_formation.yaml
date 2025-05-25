@@ -65,12 +65,24 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: WebSocketConnectHandler
-      Handler: connect.lambda_handler
+      Handler: index.lambda_handler
       Runtime: python3.11
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        S3Bucket: !Ref LambdaCodeBucket
-        S3Key: connect_function.zip
+        ZipFile: |
+          import boto3
+          import os
+
+          dynamodb = boto3.client('dynamodb')
+          table_name = os.environ['TABLE_NAME']
+
+          def lambda_handler(event, context):
+              connection_id = event['requestContext']['connectionId']
+              dynamodb.put_item(
+                  TableName=table_name,
+                  Item={'connectionId': {'S': connection_id}}
+              )
+              return {'statusCode': 200}
       Environment:
         Variables:
           TABLE_NAME: !Ref WebSocketConnectionsTable
@@ -80,12 +92,24 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: WebSocketDisconnectHandler
-      Handler: disconnect.lambda_handler
+      Handler: index.lambda_handler
       Runtime: python3.11
       Role: !GetAtt LambdaExecutionRole.Arn
       Code:
-        S3Bucket: !Ref LambdaCodeBucket
-        S3Key: disconnect_function.zip
+        ZipFile: |
+          import boto3
+          import os
+
+          dynamodb = boto3.client('dynamodb')
+          table_name = os.environ['TABLE_NAME']
+
+          def lambda_handler(event, context):
+              connection_id = event['requestContext']['connectionId']
+              dynamodb.delete_item(
+                  TableName=table_name,
+                  Key={'connectionId': {'S': connection_id}}
+              )
+              return {'statusCode': 200}
       Environment:
         Variables:
           TABLE_NAME: !Ref WebSocketConnectionsTable
@@ -95,16 +119,32 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: WebSocketSendMessageHandler
-      Handler: sendmessage.lambda_handler
+      Handler: index.lambda_handler
       Runtime: python3.11
       Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 10
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          import json
+
+          apigw_management_api = boto3.client('apigatewaymanagementapi', endpoint_url=f"https://{os.environ['APIGW_DOMAIN']}/{os.environ['APIGW_STAGE']}")
+
+          def lambda_handler(event, context):
+              connection_id = event['requestContext']['connectionId']
+              body = json.loads(event['body'])
+              message = body['message']
+
+              apigw_management_api.post_to_connection(
+                  ConnectionId=connection_id,
+                  Data=message
+              )
+              return {'statusCode': 200}
       Environment:
         Variables:
-          FASTAPI_URL: !Sub "http://${FastApiALB.DNSName}/receive"
-      Code:
-        S3Bucket: !Ref LambdaCodeBucket
-        S3Key: sendmessage_function.zip
+          APIGW_DOMAIN: !Sub "${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com"
+          APIGW_STAGE: prod
+      Timeout: 10
 
   # API Gateway WebSocket API
   WebSocketApi:
