@@ -29,3 +29,11 @@ async def receive_message(request: Request):
         return {"status": f"Failed to send message: {str(e)}"}
 
     return {"status": "Message sent"}
+
+# @app.post("/receive")
+# async def receive_message(request: Request):
+#     data = await request.json()
+#     message = data.get("message", "")
+#     # Process the message (e.g., add business logic here)
+#     processed_message = f"Processed: {message}"
+#     return {"message": processed_message}

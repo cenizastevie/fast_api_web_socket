@@ -18,21 +18,46 @@ This repository contains a FastAPI application integrated with AWS services such
 
 2. **Build and Push Docker Image**:
    ```bash
-   docker build -t fastapi-websocket ./fastapi_app
-   docker tag fastapi-websocket:latest <ECR_REPOSITORY_URI>:latest
-   docker push <ECR_REPOSITORY_URI>:latest
+   cd fastapi_app
+   aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 211626350366.dkr.ecr.us-east-1.amazonaws.com
+   docker build -t fastapi-repo .
+   docker tag fastapi-repo:latest 211626350366.dkr.ecr.us-east-1.amazonaws.com/fastapi-repo:latest
+   docker push 211626350366.dkr.ecr.us-east-1.amazonaws.com/fastapi-repo:latest
    ```
 
-3. **Update the CloudFormation template**:
-   Ensure the `FastApiTaskDefinition` in `cloud_formation.yaml` references the correct ECR repository URI.
 
-### Step 2: Deploy CloudFormation Stack
+### Step 2: Deploy VPC Stack
+1. **Deploy the VPC CloudFormation Stack**:
+   ```bash
+   aws cloudformation deploy --template-file vpc_cloud_formation.yaml --stack-name fastapi-vpc-stack --capabilities CAPABILITY_NAMED_IAM
+   ```
+
+### Step 3: Deploy CloudFormation Stack
 1. **Deploy the CloudFormation Stack**:
    ```bash
-   aws cloudformation deploy --template-file cloud_formation.yaml --stack-name fastapi-websocket-stack --capabilities CAPABILITY_NAMED_IAM --parameter-overrides VpcId=<VPC_ID> SubnetIds=<SUBNET_IDS>
+   aws cloudformation deploy --template-file cloud_formation.yaml --stack-name fastapi-websocket-stack --capabilities CAPABILITY_NAMED_IAM
    ```
 
-### Step 3: Update the Stack
+### Step 3.5: View CloudFormation Changesets
+To preview changes before updating the stack:
+1. **Create a changeset:**
+   ```cmd
+   aws cloudformation create-change-set --stack-name fastapi-websocket-stack --template-body file://cloud_formation.yaml --change-set-name preview-changeset --capabilities CAPABILITY_NAMED_IAM
+   ```
+2. **Describe the changeset:**
+   ```cmd
+   aws cloudformation describe-change-set --stack-name fastapi-websocket-stack --change-set-name preview-changeset
+   ```
+3. **(Optional) Execute the changeset:**
+   ```cmd
+   aws cloudformation execute-change-set --stack-name fastapi-websocket-stack --change-set-name preview-changeset
+   ```
+4. **(Optional) Delete the changeset if not needed:**
+   ```cmd
+   aws cloudformation delete-change-set --stack-name fastapi-websocket-stack --change-set-name preview-changeset
+   ```
+
+### Step 4: Update the Stack
 To update the stack (e.g., after modifying the application or infrastructure):
 1. Rebuild and push the Docker image (if applicable).
 2. Redeploy the CloudFormation stack:
@@ -40,7 +65,7 @@ To update the stack (e.g., after modifying the application or infrastructure):
    aws cloudformation deploy --template-file cloud_formation.yaml --stack-name fastapi-websocket-stack --capabilities CAPABILITY_NAMED_IAM
    ```
 
-### Step 4: Delete Resources
+### Step 5: Delete Resources
 1. **Delete the CloudFormation Stack**:
    ```bash
    aws cloudformation delete-stack --stack-name fastapi-websocket-stack

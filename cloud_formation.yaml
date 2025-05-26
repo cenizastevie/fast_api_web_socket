@@ -2,17 +2,6 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   FastAPI on ECS Fargate with API Gateway WebSocket + Lambda + DynamoDB connection manager
 
-Parameters:
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: Select VPC for ECS and Lambda
-  SubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets for ECS and Lambda
-  LambdaCodeBucket:
-    Type: String
-    Description: S3 bucket where Lambda function code is stored
-
 Resources:
 
   # DynamoDB Table for storing WebSocket connections
@@ -58,6 +47,12 @@ Resources:
                 Action:
                   - execute-api:ManageConnections
                 Resource: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/@connections/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
 
   # Lambda Functions for $connect, $disconnect, sendmessage
 
@@ -127,23 +122,32 @@ Resources:
           import boto3
           import os
           import json
+          import requests
 
           apigw_management_api = boto3.client('apigatewaymanagementapi', endpoint_url=f"https://{os.environ['APIGW_DOMAIN']}/{os.environ['APIGW_STAGE']}")
+          fastapi_url = os.environ['FASTAPI_URL']
 
           def lambda_handler(event, context):
               connection_id = event['requestContext']['connectionId']
               body = json.loads(event['body'])
               message = body['message']
 
+              # Forward the message to FastAPI
+              response = requests.post(f"{fastapi_url}/receive", json={"message": message})
+              if response.status_code != 200:
+                  return {'statusCode': 500, 'body': 'Error processing message'}
+
+              # Send the processed message back to the WebSocket client
               apigw_management_api.post_to_connection(
                   ConnectionId=connection_id,
-                  Data=message
+                  Data=response.text
               )
               return {'statusCode': 200}
       Environment:
         Variables:
           APIGW_DOMAIN: !Sub "${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com"
           APIGW_STAGE: prod
+          FASTAPI_URL: !Sub "http://${ALB}.amazonaws.com"
       Timeout: 10
 
   # API Gateway WebSocket API
@@ -295,7 +299,7 @@ Resources:
       ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
       ContainerDefinitions:
         - Name: fastapi
-          Image: !Sub "${FastApiRepositoryUri}:latest" # Use the ECR repository URI from ecr_task.yaml output
+          Image: !ImportValue FastApiRepositoryUri
           PortMappings:
             - ContainerPort: 8000
           Environment:
@@ -317,4 +321,85 @@ Resources:
     Properties:
       Cluster: !Ref EcsCluster
       DesiredCount: 1
+      TaskDefinition: !Ref FastApiTaskDefinition
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !ImportValue PublicSubnetId
+            - !ImportValue PublicSubnet2Id
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          AssignPublicIp: ENABLED
+
+  # Application Load Balancer
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: fastapi-alb
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue PublicSubnetId
+        - !ImportValue PublicSubnet2Id
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  # Target Group for ECS Service
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: fastapi-target-group
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !ImportValue VPCId
+      TargetType: ip
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Security Group
+      VpcId: !ImportValue VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ECSSecurityGroup
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB Security Group
+      VpcId: !ImportValue VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ALBSecurityGroup
+
+  # CloudWatch Log Group for ECS and Lambda
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/fastapi-websocket
+      RetentionInDays: 7
 
